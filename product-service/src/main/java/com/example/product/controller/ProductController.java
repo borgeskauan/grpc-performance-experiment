@@ -2,37 +2,60 @@ package com.example.product.controller;
 
 import com.example.product.model.Product;
 import com.example.product.service.RecordGenerator;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 
 @RestController
 @RequestMapping("/api/products")
 public class ProductController {
 
-    private static final int DEFAULT_BATCH_SIZE = 100;
+    private static final long POLL_TIMEOUT_MS = 10000; // 10 second timeout per connection
 
     private final RecordGenerator recordGenerator;
+    private final ObjectMapper objectMapper;
 
-    public ProductController(RecordGenerator recordGenerator) {
+    public ProductController(RecordGenerator recordGenerator, ObjectMapper objectMapper) {
         this.recordGenerator = recordGenerator;
+        this.objectMapper = objectMapper;
     }
 
     @GetMapping
-    public ResponseEntity<List<Product>> getProducts(
-            @RequestParam(required = false, defaultValue = "100") int batchSize) {
+    public ResponseEntity<StreamingResponseBody> getProducts() {
         
-        // Return batch of identical records (max-speed, no throttling)
-        int size = batchSize > 0 ? batchSize : DEFAULT_BATCH_SIZE;
-        List<Product> batch = new ArrayList<>(size);
-        Product template = recordGenerator.getProduct();
+        StreamingResponseBody stream = outputStream -> {
+            Product template = recordGenerator.getProduct();
+            String jsonRecord = objectMapper.writeValueAsString(template);
+            byte[] recordBytes = (jsonRecord + "\n").getBytes(StandardCharsets.UTF_8);
+            
+            long startTime = System.currentTimeMillis();
+            long count = 0;
+            
+            try {
+                // Stream records until timeout (long polling)
+                while (System.currentTimeMillis() - startTime < POLL_TIMEOUT_MS) {
+                    outputStream.write(recordBytes);
+                    outputStream.flush();
+                    count++;
+                    
+                    // Small yield to prevent 100% CPU
+                    if (count % 1000 == 0) {
+                        Thread.sleep(1);
+                    }
+                }
+            } catch (IOException | InterruptedException e) {
+                // Client disconnected or interrupted
+            }
+        };
         
-        for (int i = 0; i < size; i++) {
-            batch.add(template);
-        }
-
-        return ResponseEntity.ok(batch);
+        return ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                .body(stream);
     }
 }

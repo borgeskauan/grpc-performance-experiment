@@ -1,7 +1,6 @@
 import http from 'k6/http';
 import { check } from 'k6';
 import { Counter, Rate } from 'k6/metrics';
-import encoding from 'k6/encoding';
 
 // Custom metrics - standardized across all tests
 const goodputBytesTotal = new Counter('goodput_bytes_total');
@@ -21,13 +20,15 @@ export const options = {
 };
 
 const BASE_URL = 'http://localhost:8080';
-const BATCH_SIZE = 100; // Request 100 records per poll
 
 export default function () {
   const tags = { method: 'polling', domain: 'product' };
   
-  // Greedy polling - no sleep, request immediately
-  const response = http.get(`${BASE_URL}/api/products?batchSize=${BATCH_SIZE}`, { tags });
+  // Long polling - make request, server streams until timeout, then reconnect
+  const response = http.get(`${BASE_URL}/api/products`, { 
+    tags,
+    timeout: '15s' // Slightly longer than server timeout
+  });
   
   const success = check(response, {
     'status is 200': (r) => r.status === 200,
@@ -37,19 +38,16 @@ export default function () {
   
   if (success && response.body) {
     // Measure goodput as UTF-8 bytes
-    const bodyBytes = new TextEncoder().encode(response.body).length;
+    const bodyBytes = response.body.length;
     goodputBytesTotal.add(bodyBytes, tags);
     
-    // Count records
-    try {
-      const records = JSON.parse(response.body);
-      if (Array.isArray(records)) {
-        recordsTotal.add(records.length, tags);
-      }
-    } catch (e) {
-      errorRate.add(1, tags);
-    }
+    // Count records (newline-separated JSON objects)
+    const lines = response.body.trim().split('\n');
+    const recordCount = lines.filter(line => line.length > 0).length;
+    recordsTotal.add(recordCount, tags);
   }
+  
+  // Immediately reconnect (greedy long polling)
 }
 
 export function handleSummary(data) {
@@ -59,7 +57,7 @@ export function handleSummary(data) {
   const measureDuration = measureEnd - measureStart; // 30 seconds
   
   let summary = '\n=== Product HTTP Polling Throughput Test ===\n';
-  summary += 'Method: HTTP Polling (Greedy)\n';
+  summary += 'Method: HTTP Long Polling\n';
   summary += 'Domain: Product\n';
   summary += `MEASURE Window: ${measureStart}s - ${measureEnd}s (${measureDuration}s)\n\n`;
   

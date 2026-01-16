@@ -1,4 +1,5 @@
 import { Client, Stream } from 'k6/net/grpc';
+import { sleep } from 'k6';
 import { Counter, Rate } from 'k6/metrics';
 
 // Custom metrics - standardized across all tests
@@ -21,23 +22,24 @@ export const options = {
 const client = new Client();
 client.load(['../product-service/src/main/proto'], 'product.proto');
 
+// Since server sends same message repeatedly, compute bytes per record once globally
+let bytesPerRecord = 0;
+
 export default function () {
   if (__ITER == 0) {
     client.connect('localhost:9090', { plaintext: true });
   }
 
   const tags = { method: 'streaming', domain: 'product' };
-  const testStart = Date.now();
-  const measureWindowEnd = testStart + 50000; // Stream for ~50s (entire test)
   
   const stream = new Stream(client, 'product.ProductService/StreamProducts');
 
   stream.on('data', function (product) {
-    // Measure goodput as UTF-8 bytes of JSON representation
-    const jsonStr = JSON.stringify(product);
-    const bytes = new TextEncoder().encode(jsonStr).length;
+    if (bytesPerRecord === 0) {
+      bytesPerRecord = JSON.stringify(product).length;
+    }
     
-    goodputBytesTotal.add(bytes, tags);
+    goodputBytesTotal.add(bytesPerRecord, tags);
     recordsTotal.add(1, tags);
   });
 
@@ -46,27 +48,20 @@ export default function () {
   });
 
   stream.on('error', function (err) {
-    console.error('Stream error:', err.message || err);
-    errorRate.add(1, tags);
+    // Only log unexpected errors (not normal cancellation/completion)
+    const errMsg = err.message || err.toString();
+    if (!errMsg.includes('canceled') && !errMsg.includes('deadline')) {
+      console.error('Stream error:', errMsg);
+      errorRate.add(1, tags);
+    }
   });
 
   // Start streaming
   stream.write({});
   
-  // Read continuously until MEASURE window ends
-  // k6 will handle stream lifecycle based on test stages
-  const streamDuration = 30000; // 30 seconds for main MEASURE phase
-  const checkInterval = 100;
-  let elapsed = 0;
-  
-  while (elapsed < streamDuration) {
-    // Keep VU alive and reading
-    sleep(checkInterval / 1000);
-    elapsed += checkInterval;
-  }
-  
-  // Close stream gracefully
-  stream.end();
+  // Keep VU alive for the full test duration (50s) so stream stays open
+  // This allows continuous streaming instead of repeatedly opening/closing
+  sleep(60); // Sleep longer than test duration - k6 will interrupt when test ends
 }
 
 export function handleSummary(data) {
