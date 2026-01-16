@@ -7,13 +7,9 @@ const goodputBytesTotal = new Counter('goodput_bytes_total');
 const recordsTotal = new Counter('records_total');
 const errorRate = new Rate('error_rate');
 
-// Shared test configuration: 10s warmup + 30s MEASURE + 10s cooldown
 export const options = {
-  stages: [
-    { duration: '10s', target: 10 },  // Warmup
-    { duration: '30s', target: 10 },  // MEASURE window
-    { duration: '10s', target: 0 },   // Cooldown
-  ],
+  vus: 10,
+  duration: '50s',
   thresholds: {
     'error_rate': ['rate<0.01'],
   },
@@ -59,30 +55,29 @@ export default function () {
   // Start streaming
   stream.write({});
   
-  // Keep VU alive for the full test duration (50s) so stream stays open
-  // This allows continuous streaming instead of repeatedly opening/closing
-  sleep(60); // Sleep longer than test duration - k6 will interrupt when test ends
+  // Keep stream open for test duration
+  sleep(50);
+  
+  // End stream gracefully when iteration completes
+  stream.end();
 }
 
 export function handleSummary(data) {
-  // Extract metrics for MEASURE window only (10s - 40s)
-  const measureStart = 10;
-  const measureEnd = 40;
-  const measureDuration = measureEnd - measureStart; // 30 seconds
+  const testDuration = data.state.testRunDurationMs / 1000;
   
   let summary = '\n=== Product gRPC Streaming Throughput Test ===\n';
   summary += 'Method: gRPC Streaming\n';
   summary += 'Domain: Product\n';
-  summary += `MEASURE Window: ${measureStart}s - ${measureEnd}s (${measureDuration}s)\n\n`;
+  summary += `Test Duration: ${testDuration.toFixed(1)}s\n\n`;
   
   // Calculate totals
   const totalBytes = data.metrics.goodput_bytes_total?.values?.count || 0;
   const totalRecords = data.metrics.records_total?.values?.count || 0;
   const errorRateValue = data.metrics.error_rate?.values?.rate || 0;
   
-  // Calculate rates (approximate for MEASURE window)
-  const bytesPerSec = totalBytes / measureDuration;
-  const recordsPerSec = totalRecords / measureDuration;
+  // Calculate rates
+  const bytesPerSec = totalBytes / testDuration;
+  const recordsPerSec = totalRecords / testDuration;
   
   summary += `Total Bytes Transferred: ${totalBytes.toLocaleString()} bytes\n`;
   summary += `Total Records Received: ${totalRecords.toLocaleString()}\n`;

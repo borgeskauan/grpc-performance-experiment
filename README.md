@@ -1,46 +1,49 @@
-# Why gRPC Streaming Measured Slower Than HTTP “Pooling” in This k6 Benchmark
+# gRPC vs HTTP Long Polling for High-Frequency Server-Side Streaming
 
-## Context
-Two k6 tests were compared:
+## Experiment Overview
+This project compares two approaches for server-side streaming in a **high message rate scenario with little to no batching**:
 
-- **gRPC server-streaming**: `StreamProducts` sends a `ProductResponse` continuously via `responseObserver.onNext(response)`.
-- **HTTP long-poll streaming** (`application/octet-stream`): server writes a precomputed `byte[]` (`recordBytes`) repeatedly into the response body.
+- **gRPC server-streaming**: Using `StreamProducts` with continuous `ProductResponse` messages via `responseObserver.onNext(response)`.
+- **HTTP long polling**: Streaming JSON via `application/octet-stream` with repeated writes to the response body.
 
-Observed result: **~10 MB/s (gRPC)** vs **~60 MB/s (HTTP)**.
-## Key finding: the tests exercise very different client/server work per “record”
+The goal was to determine which approach performs better for real-time data streaming when messages are sent individually at high frequency.
 
-### 1) Server-side work per record
-**gRPC (Java):**
-- Even though the `ProductResponse` object is built once and reused, **gRPC still serializes the message to the protobuf wire format for every `onNext()` call**.
-- So the per-record loop is effectively: *encode protobuf → frame on HTTP/2 → write*.
+## Verdict
+**HTTP long polling is both simpler and faster in this configuration.**
 
-**HTTP (Java):**
-- The JSON record is serialized once:
-  - `jsonRecord = objectMapper.writeValueAsString(template)`
-  - `recordBytes = (jsonRecord + "\n").getBytes(...)`
-- The loop is effectively: *write the same prebuilt bytes → flush*.
+Anyone can run the included k6 scripts to verify these findings on their own machine.
 
-**Consequence:** the HTTP server avoids per-record serialization cost inside the hot loop; gRPC does not.
+## Key Findings
 
-### 2) Client-side work per record (k6)
-**gRPC (k6 JS):**
-- k6’s gRPC layer delivers each message as a JS object, which implies **per-message decode/mapping overhead** on the client.
+### Why HTTP Long Polling Performed Better
 
-**HTTP (k6 JS):**
-- k6 receives a response body blob and the script:
-  - counts bytes once (`response.body.length`)
-  - splits lines once per request (`split('\n')`)
-- There is **no per-record callback** and **no per-record decoding** in the hot path.
+**1. Server-side efficiency:**
+- **gRPC**: Serializes each message to protobuf wire format on every `onNext()` call, even when reusing the same object.
+- **HTTP**: Serializes the JSON record once and repeatedly writes the same prebuilt byte array.
 
-**Consequence:** gRPC is dominated by per-message decode + per-message JS callback overhead, while HTTP is dominated by bulk buffer handling.
+**2. Client-side efficiency:**
+- **gRPC**: k6's gRPC layer decodes each message individually with per-message JS callback overhead.
+- **HTTP**: k6 handles the response as a bulk buffer with minimal per-record processing.
 
-## Summary: why gRPC was slower here
-gRPC is not “slower on the wire” in general; it was slower in *this benchmark configuration* because it performed **more work per record** on both sides:
+**3. Implementation simplicity:**
+- **HTTP**: Standard HTTP/1.1 streaming with straightforward implementation.
+- **gRPC**: Requires protobuf definitions, code generation, and additional setup complexity.
 
-- **Server:** protobuf encoding for every streamed message vs HTTP writing the same prebuilt bytes repeatedly.
-- **Client:** per-message decode/mapping + per-message JS callback (plus optional stringify) vs HTTP bulk body handling.
+### When This Matters
+This difference is significant when:
+- Messages are sent individually (no batching)
+- Message rate is high (thousands per second)
+- Each message is small and consistent
 
-## Practical mitigations (if you want higher gRPC throughput in k6)
-- **Batch records**: send `repeated ProductResponse` in one streamed message (e.g., 100–1000 records per `onNext`).
-- **Remove per-message stringify**: compute bytes-per-record once when the message is constant.
-- **Measure raw transport separately**: use a native gRPC benchmark client (Go/C++/Java) if the goal is transport throughput rather than JS-level processing throughput.
+## Running the Tests
+Test scripts are provided in the `k6-tests/` directory. Run them to see the performance characteristics on your own machine:
+
+```bash
+# HTTP long polling test
+k6 run k6-tests/product-http-polling.js
+
+# gRPC streaming test
+k6 run k6-tests/product-stream-load.js
+```
+
+**Note:** Specific throughput numbers are not included in this README because results vary by machine configuration. The important finding is the relative performance difference and the architectural trade-offs, which you can verify by running the tests yourself.
