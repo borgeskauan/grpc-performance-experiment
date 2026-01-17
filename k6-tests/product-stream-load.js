@@ -12,7 +12,7 @@ export const options = {
       executor: "per-vu-iterations",
       vus: 10,
       iterations: 1,
-      maxDuration: "60s",
+      maxDuration: "50s",
     },
   },
 };
