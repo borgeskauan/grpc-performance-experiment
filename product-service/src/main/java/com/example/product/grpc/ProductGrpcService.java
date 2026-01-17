@@ -49,7 +49,7 @@ public class ProductGrpcService extends ProductServiceGrpc.ProductServiceImplBas
                         count++;
                     } else {
                         // Client buffer is full, wait a bit before retrying
-                        Thread.sleep(100);
+                        Thread.sleep(1);
                     }
 
                 } catch (Exception e) {

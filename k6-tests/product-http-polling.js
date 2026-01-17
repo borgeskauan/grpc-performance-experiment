@@ -66,8 +66,6 @@ export function handleSummary(data) {
   summary += `Record Rate: ${recordsPerSec.toFixed(2)} records/sec\n`;
   summary += `Errors: ${errorCount.toLocaleString()}\n`;
   
-  console.log(summary);
-  
   return {
     'stdout': summary,
   };
