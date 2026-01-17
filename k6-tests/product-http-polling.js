@@ -18,7 +18,8 @@ export default function () {
   
   // Long polling - make request, server answers until timeout, then reconnect
   const response = http.get(`${BASE_URL}/api/products`, { 
-    tags
+    tags,
+    http2: true
   });
   
   const success = check(response, {

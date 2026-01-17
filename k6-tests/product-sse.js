@@ -17,6 +17,7 @@ export default function () {
     method: "GET",
     headers: { Accept: "text/event-stream" },
     tags,
+    http2: true,
   }, (client) => {
     client.on("event", (evt) => {
       if (!evt?.data) return;
