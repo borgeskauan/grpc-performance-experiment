@@ -1,6 +1,6 @@
 import http from 'k6/http';
 import { check } from 'k6';
-import { Counter, Rate } from 'k6/metrics';
+import { Counter } from 'k6/metrics';
 
 // Custom metrics - standardized across all tests
 const recordsTotal = new Counter('records_total');
@@ -16,10 +16,9 @@ const BASE_URL = 'http://localhost:8080';
 export default function () {
   const tags = { method: 'polling', domain: 'product' };
   
-  // Long polling - make request, server streams until timeout, then reconnect
+  // Long polling - make request, server answers until timeout, then reconnect
   const response = http.get(`${BASE_URL}/api/products`, { 
-    tags,
-    timeout: '15s' // Slightly longer than server timeout
+    tags
   });
   
   const success = check(response, {

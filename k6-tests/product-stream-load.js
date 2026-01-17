@@ -1,6 +1,6 @@
 import { Client, Stream } from 'k6/net/grpc';
 import { sleep } from 'k6';
-import { Counter, Rate } from 'k6/metrics';
+import { Counter } from 'k6/metrics';
 
 // Custom metrics - standardized across all tests
 const recordsTotal = new Counter('records_total');
