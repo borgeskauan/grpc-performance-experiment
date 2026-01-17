@@ -16,8 +16,6 @@ import java.nio.charset.StandardCharsets;
 @RequestMapping("/api/products")
 public class ProductController {
 
-    private static final long POLL_TIMEOUT_MS = 10000; // 10 second timeout per connection
-
     private final RecordGenerator recordGenerator;
     private final ObjectMapper objectMapper;
 
@@ -30,28 +28,13 @@ public class ProductController {
     public ResponseEntity<StreamingResponseBody> getProducts() {
         
         StreamingResponseBody stream = outputStream -> {
-            Product template = recordGenerator.getProduct();
-            String jsonRecord = objectMapper.writeValueAsString(template);
+            // Return a single record per request (true long polling)
+            Product product = recordGenerator.getProduct();
+            String jsonRecord = objectMapper.writeValueAsString(product);
             byte[] recordBytes = (jsonRecord + "\n").getBytes(StandardCharsets.UTF_8);
             
-            long startTime = System.currentTimeMillis();
-            long count = 0;
-            
-            try {
-                // Stream records until timeout (long polling)
-                while (System.currentTimeMillis() - startTime < POLL_TIMEOUT_MS) {
-                    outputStream.write(recordBytes);
-                    outputStream.flush();
-                    count++;
-                    
-                    // Small yield to prevent 100% CPU
-                    if (count % 1000 == 0) {
-                        Thread.sleep(1);
-                    }
-                }
-            } catch (IOException | InterruptedException e) {
-                // Client disconnected or interrupted
-            }
+            outputStream.write(recordBytes);
+            outputStream.flush();
         };
         
         return ResponseEntity.ok()

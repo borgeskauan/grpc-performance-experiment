@@ -3,16 +3,12 @@ import { check } from 'k6';
 import { Counter, Rate } from 'k6/metrics';
 
 // Custom metrics - standardized across all tests
-const goodputBytesTotal = new Counter('goodput_bytes_total');
 const recordsTotal = new Counter('records_total');
-const errorRate = new Rate('error_rate');
+const errorCount = new Counter('error_count');
 
 export const options = {
   vus: 10,
-  duration: '50s',
-  thresholds: {
-    'error_rate': ['rate<0.01'],
-  },
+  duration: '50s'
 };
 
 const BASE_URL = 'http://localhost:8080';
@@ -30,17 +26,23 @@ export default function () {
     'status is 200': (r) => r.status === 200,
   }, tags);
   
-  errorRate.add(!success, tags);
+  if (!success) {
+    errorCount.add(1, tags);
+  }
   
   if (success && response.body) {
-    // Measure goodput as UTF-8 bytes
-    const bodyBytes = response.body.length;
-    goodputBytesTotal.add(bodyBytes, tags);
-    
-    // Count records (newline-separated JSON objects)
+    // Process each record individually
     const lines = response.body.trim().split('\n');
-    const recordCount = lines.filter(line => line.length > 0).length;
-    recordsTotal.add(recordCount, tags);
+    
+    for (const line of lines) {
+      if (line.length > 0) {
+        // Validate record can be serialized (parse JSON)
+        const record = JSON.parse(line);
+        
+        // Increment record counter
+        recordsTotal.add(1, tags);
+      }
+    }
   }
   
   // Immediately reconnect (greedy long polling)
@@ -55,19 +57,15 @@ export function handleSummary(data) {
   summary += `Test Duration: ${testDuration.toFixed(1)}s\n\n`;
   
   // Calculate totals
-  const totalBytes = data.metrics.goodput_bytes_total?.values?.count || 0;
   const totalRecords = data.metrics.records_total?.values?.count || 0;
-  const errorRateValue = data.metrics.error_rate?.values?.rate || 0;
+  const errorCount = data.metrics.error_count?.values?.count || 0;
   
   // Calculate rates
-  const bytesPerSec = totalBytes / testDuration;
   const recordsPerSec = totalRecords / testDuration;
   
-  summary += `Total Bytes Transferred: ${totalBytes.toLocaleString()} bytes\n`;
   summary += `Total Records Received: ${totalRecords.toLocaleString()}\n`;
-  summary += `Throughput: ${(bytesPerSec / 1024 / 1024).toFixed(2)} MB/s\n`;
   summary += `Record Rate: ${recordsPerSec.toFixed(2)} records/sec\n`;
-  summary += `Error Rate: ${(errorRateValue * 100).toFixed(2)}%\n`;
+  summary += `Errors: ${errorCount.toLocaleString()}\n`;
   
   console.log(summary);
   

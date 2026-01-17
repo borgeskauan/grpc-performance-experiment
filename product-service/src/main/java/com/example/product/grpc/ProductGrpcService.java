@@ -23,18 +23,10 @@ public class ProductGrpcService extends ProductServiceGrpc.ProductServiceImplBas
     public void streamProducts(ProductStreamRequest request, StreamObserver<ProductResponse> responseObserver) {
         log.info("StreamProducts called - streaming with backpressure control");
         
-        // Cast to ServerCallStreamObserver for backpressure control
-        ServerCallStreamObserver<ProductResponse> serverCallStreamObserver = 
-                (ServerCallStreamObserver<ProductResponse>) responseObserver;
-        
-        // Track if client has cancelled
-        final boolean[] cancelled = {false};
-        serverCallStreamObserver.setOnCancelHandler(() -> {
-            cancelled[0] = true;
-            log.info("Client cancelled stream");
-        });
-        
         try {
+            ServerCallStreamObserver<ProductResponse> serverObserver = 
+                    (ServerCallStreamObserver<ProductResponse>) responseObserver;
+            
             Product template = recordGenerator.getProduct();
             
             // Pre-build response once for reuse
@@ -48,31 +40,27 @@ public class ProductGrpcService extends ProductServiceGrpc.ProductServiceImplBas
             
             long count = 0;
             
-            // Stream continuously until client cancels
-            while (!cancelled[0]) {
-                // Proper backpressure: only send when ready
-                if (serverCallStreamObserver.isReady()) {
-                    try {
-                        responseObserver.onNext(response);
+            // Stream with backpressure control
+            while (!serverObserver.isCancelled()) {
+                try {
+                    // Only write if client is ready to receive
+                    if (serverObserver.isReady()) {
+                        serverObserver.onNext(response);
                         count++;
-                        
-                        // Small yield to prevent 100% CPU
-                        if (count % 1000 == 0) {
-                            Thread.sleep(1);
-                        }
-
-                    } catch (Exception e) {
-                        // Client disconnected
-                        log.info("Client disconnected after {} products: {}", count, e.getMessage());
-                        return;
+                    } else {
+                        // Client buffer is full, wait a bit before retrying
+                        Thread.sleep(100);
                     }
-                } else {
-                    // Backpressure: wait a bit for buffer to drain
-                    Thread.sleep(1);
+
+                } catch (Exception e) {
+                    // Client disconnected
+                    log.info("Client disconnected after {} products: {}", count, e.getMessage());
+                    return;
                 }
             }
             
-            log.info("StreamProducts completed, sent {} products", count);
+            log.info("Stream completed after sending {} products", count);
+            serverObserver.onCompleted();
             
         } catch (Exception e) {
             log.error("Error in streamProducts", e);
